@@ -131,6 +131,25 @@ public static class HavokPosing {
 		return new Transform(pos, rot, sca);
 	}
 	
+	public unsafe static Transform CalculateWorldTransform(hkaPose* pose, int boneIx, Transform inputTransform)
+	{
+		var parentIdx = pose->Skeleton->ParentIndices[boneIx];
+		if (parentIdx == -1) return inputTransform;
+
+		var parentWorld = GetModelTransform(pose, parentIdx);
+		if (parentWorld == null) return inputTransform;
+		
+		// ParentRot * LocalRot
+		var newRot = Quaternion.Normalize(parentWorld.Rotation * inputTransform.Rotation);
+
+		// ParentPos + (ParentRot * (LocalPos * ParentScale))
+		var scaledLocalPos = inputTransform.Position * parentWorld.Scale;
+		var rotatedLocalPos = Vector3.Transform(scaledLocalPos, parentWorld.Rotation);
+		var newPos = parentWorld.Position + rotatedLocalPos;
+
+		return new Transform(newPos, newRot, inputTransform.Scale);
+	}
+	
 	// Propagation
 
 	public unsafe static void Propagate(Skeleton* skele, int partialIx, int boneIx, Transform target, Transform initial, bool propagatePartials = true) {
@@ -198,6 +217,82 @@ public static class HavokPosing {
 			SetModelTransform(pose, i, new Transform(scm * rtm * trm, trans));
 		}
 	}
+	
+	public unsafe static void PropagateWithTransforms(Skeleton* skele, int partialIx, int boneIx, Transform target, Transform initial, bool propagatePartials = true) {
+		var partial = skele->PartialSkeletons[partialIx];
+		var pose = partial.GetHavokPose(0);
+		if (pose == null || pose->Skeleton == null) return;
+
+		// Calculate transform delta & propagate to children
+		
+		var sourcePos = target.Position;
+		var deltaPos = sourcePos - initial.Position;
+		var deltaRot = Quaternion.Normalize(target.Rotation / initial.Rotation);
+		PropagateWithTransforms(pose, boneIx, sourcePos, deltaPos, deltaRot);
+
+		if (partialIx != 0 || !propagatePartials) return;
+		
+		// Propagate connected partial skeletons
+
+		var hkaSkele = pose->Skeleton;
+		for (var p = 0; p < skele->PartialSkeletonCount; p++) {
+			var subPartial = skele->PartialSkeletons[p];
+			if (subPartial.HavokPoses.IsEmpty) continue;
+
+			var subPose = subPartial.GetHavokPose(0);
+			if (subPose == null) continue;
+
+			var subSkele = subPose->Skeleton;
+			if (!IsMultiRootSkeleton(subSkele->ParentIndices)) {
+				// propagate normally if this is a single-binding partial (i.e. hair, face to j_kao)
+				var rootBone = subPartial.ConnectedBoneIndex;
+				var parentBone = subPartial.ConnectedParentBoneIndex;
+				if (parentBone != boneIx && !IsBoneDescendantOf(hkaSkele->ParentIndices, parentBone, boneIx)) continue;
+				PropagateWithTransforms(subPose, rootBone, sourcePos, deltaPos, deltaRot);
+			} else {
+				// propagate against each root in a multi-root partial (i.e. j_ex_top_a_l to j_ude_a_l && j_ex_top_a_r to j_ude_a_r)
+				var multi_roots = GetMultiRoots(subSkele->ParentIndices);
+				foreach(int root_idx in multi_roots) {
+					var parent_root_idx = TryGetBoneNameIndex(pose, subSkele->Bones[root_idx].Name.String);
+
+					// account for either:
+					// 1. boneIx being posed refers to the same bone as a root_idx
+					// 2. boneIx being posed is the parent of a root_idx within the parent skeleton
+					bool manipulated_bone_is_multi_root = hkaSkele->Bones[boneIx].Name.String == subSkele->Bones[root_idx].Name.String;
+					bool manipulated_bone_is_parent = parent_root_idx != -1 ? IsBoneDescendantOf(hkaSkele->ParentIndices, parent_root_idx, boneIx) : false;
+					if (manipulated_bone_is_multi_root || manipulated_bone_is_parent) PropagateWithTransforms(subPose, root_idx, sourcePos, deltaPos, deltaRot);
+				}
+			}
+		}
+	}
+
+	private unsafe static void PropagateWithTransforms(hkaPose* pose, int boneIx, Vector3 sourcePos, Vector3 deltaPos, Quaternion deltaRot) {
+		var initialPivotPos = sourcePos - deltaPos;
+		var targetPivotPos = sourcePos;
+
+		var hkaSkele = pose->Skeleton;
+		for (var i = boneIx; i < hkaSkele->Bones.Length; i++) {
+			if (!IsBoneDescendantOf(hkaSkele->ParentIndices, i, boneIx)) continue;
+
+			var oldChildTransform = GetModelTransform(pose, i);
+			if (oldChildTransform == null) {
+				Ktisis.Log.Error($"HavokPosing.PropagateWithTransforms - null transform returned for pose; boneI {i} boneIx {boneIx}");
+				continue;
+			}
+
+			var newRotation = Quaternion.Normalize(deltaRot * oldChildTransform.Rotation);
+			
+			var childRelativePos = oldChildTransform.Position - initialPivotPos;
+			var newRelativePos = Vector3.Transform(childRelativePos, deltaRot);
+			var newPosition = targetPivotPos + newRelativePos;
+
+			var newScale = ClampVector3(oldChildTransform.Scale);
+
+			var newChildTransform = new Transform(newPosition, newRotation, newScale);
+			SetModelTransform(pose, i, newChildTransform);
+		}
+	}
+
 	private static Vector3 ClampVector3(Vector3 vector) {
 		// use to restrict 0-scaled bones from c+
 		var x = (vector.X < 0.001f && vector.X > -0.001f) ? 0.001f : vector.X;
