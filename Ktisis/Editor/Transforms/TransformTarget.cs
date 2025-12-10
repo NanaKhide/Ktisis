@@ -163,11 +163,18 @@ public class TransformTarget : ITransformTarget {
 		}
 		
 		var bInitial = HavokPosing.GetModelTransform(hkaPose, bIndex)!;
-		bone.SetTransform(new Transform(newMx, bInitial));
+
+		if (this.Setup.UseMatrixlessPropagation)
+			bone.SetTransform(new Transform(newMx));
+		else
+			bone.SetTransform(new Transform(newMx, bInitial));
 
 		if (!this.Setup.ParentBones) return;
 
 		var final = HavokPosing.GetModelTransform(hkaPose, bIndex)!;
-		HavokPosing.Propagate(skeleton, bone.Info.PartialIndex, bone.Info.BoneIndex, final, bInitial);
+		if (this.Setup.UseMatrixlessPropagation)
+			HavokPosing.PropagateWithTransforms(skeleton, bone.Info.PartialIndex, bone.Info.BoneIndex, final, bInitial);
+		else
+			HavokPosing.Propagate(skeleton, bone.Info.PartialIndex, bone.Info.BoneIndex, final, bInitial);
 	}
 }

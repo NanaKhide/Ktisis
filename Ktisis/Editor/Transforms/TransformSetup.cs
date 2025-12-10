@@ -12,6 +12,7 @@ public record class TransformSetup {
 	public MirrorMode MirrorRotation = MirrorMode.Parallel;
 	public bool ParentBones = true;
 	public bool RelativeBones = true;
+	public bool UseMatrixlessPropagation { get; set; } = false;
 
 	public void Configure(GizmoConfig cfg) {
 		this.MirrorRotation = cfg.MirrorRotation;
