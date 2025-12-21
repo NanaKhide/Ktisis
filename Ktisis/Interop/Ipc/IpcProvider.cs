@@ -151,19 +151,12 @@ public class IpcProvider(ContextManager ctxManager, IDalamudPluginInterface dpi,
 		{
 			parentWorld = actor.GetTransform();
 		}
-
-		// can't find a parent context, return input as is
 		if (parentWorld == null) return inputTransform;
-
-		// ParentRot * LocalRot
+		
 		var newRot = Quaternion.Normalize(parentWorld.Rotation * inputTransform.Rotation);
-
-		// ParentPos + (ParentRot * (LocalPos * ParentScale))
 		var scaledLocalPos = inputTransform.Position * parentWorld.Scale;
 		var rotatedLocalPos = Vector3.Transform(scaledLocalPos, parentWorld.Rotation);
 		var newPos = parentWorld.Position + rotatedLocalPos;
-
-		// Parent Scale * Local Scale to respect actor/parent scaling
 		var newScale = inputTransform.Scale * parentWorld.Scale;
 
 		return new Transform(newPos, newRot, newScale);
@@ -188,19 +181,19 @@ public class IpcProvider(ContextManager ctxManager, IDalamudPluginInterface dpi,
 
 		if (parentWorld == null) return worldTransform;
 
-		// size of the bone in the world not relative to parent
-		var localScale = worldTransform.Scale;
-
-		// Inv(ParentRot) * WorldRot
+		var pScale = parentWorld.Scale;
+		var localScale = new Vector3(
+			Math.Abs(pScale.X) > 0.0001f ? worldTransform.Scale.X / pScale.X : worldTransform.Scale.X,
+			Math.Abs(pScale.Y) > 0.0001f ? worldTransform.Scale.Y / pScale.Y : worldTransform.Scale.Y,
+			Math.Abs(pScale.Z) > 0.0001f ? worldTransform.Scale.Z / pScale.Z : worldTransform.Scale.Z
+		);
+		
 		var invParentRot = Quaternion.Inverse(parentWorld.Rotation);
 		var localRot = Quaternion.Normalize(invParentRot * worldTransform.Rotation);
 
-		// Inv(ParentRot) * (WorldPos - ParentPos) / ParentScale
-		// divide by ParentScale get correct relative distance
 		var posDiff = worldTransform.Position - parentWorld.Position;
 		var unrotatedPos = Vector3.Transform(posDiff, invParentRot);
-
-		var pScale = parentWorld.Scale;
+		
 		var localPos = new Vector3(
 			Math.Abs(pScale.X) > 0.0001f ? unrotatedPos.X / pScale.X : unrotatedPos.X,
 			Math.Abs(pScale.Y) > 0.0001f ? unrotatedPos.Y / pScale.Y : unrotatedPos.Y,
